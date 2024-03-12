@@ -60,11 +60,12 @@ def validate_config(prec, parallelize_m, parallelize_k, m_tiles, n_tiles, k_tile
                               'cluster'
     assert not (parallelize_m and parallelize_k), 'Cannot parallelize K and M simultaneously'
     assert not ta, 'SIMD kernels don\'t support transposed A matrix'
-    assert not ((prec != 64) and not baseline and not tb), 'Optimized SIMD kernels only support transposed B matrix'
+    assert not ((prec != 64) and not baseline and not tb), 'Optimized SIMD kernels only support' \
+                                                           ' transposed B matrix'
     assert not tb or n_tiles == 1, 'Tiling in the N dimension supported only if B is' \
-                                             ' not transposed'
+                                   ' not transposed'
     assert not tb or k_tiles == 1, 'Tiling in the K dimension supported only if B is' \
-                                             ' not transposed'
+                                   ' not transposed'
     assert baseline or frac_n >= 8, 'N dimension of tile size must be greater or equal to' \
                                     ' the unrolling factor (8) when using optimized kernels'
 
@@ -78,11 +79,6 @@ def emit_header(**kwargs):
     prec = kwargs['prec']
     dtype = NUMPY_TYPES[str(prec)]
     M, N, K = kwargs['M'], kwargs['N'], kwargs['K']
-    m_tiles = kwargs['m_tiles']
-    n_tiles = kwargs['n_tiles']
-    k_tiles = kwargs['k_tiles']
-    parallelize_m = kwargs['parallelize_m']
-    parallelize_k = kwargs['parallelize_k']
     baseline = kwargs['baseline']
 
     if prec == 8:
