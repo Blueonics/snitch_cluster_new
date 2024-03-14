@@ -13,6 +13,71 @@ import struct
 from datetime import datetime
 import torch
 import numpy as np
+import struct
+import math
+
+C_TYPES = {
+  'FP64': 'double',
+  'FP32': 'float',
+  'FP16': '__fp16',
+  'FP8': 'char',
+  'FP8ALT': 'char'
+}
+
+NUMPY_TYPES = {
+  'FP64': np.double,
+  'FP32': np.single,
+  'FP16': np.half,
+  'BFLOAT16': 'bfloat16',  # 'bfloat16' is not a valid Numpy type, but it is used in PyTorch
+  'FP8': np.ubyte,
+  'FP8ALT': np.ubyte
+}
+
+FP8_FORMATS = {
+    'fp8': {'exp': 5, 'mant': 2},
+    'fp8alt': {'exp': 4, 'mant': 3}
+}
+
+def float32_to_custom_fp8(float32, exponent_bits, mantissa_bits):
+    # Assert that the total of exponent and mantissa bits does not exceed 7
+    assert exponent_bits + mantissa_bits <= 7, "Exponent and mantissa bits must not exceed 7"
+    
+    # Constants for our custom floating-point format
+    SIGN_MASK = 0x80000000
+    EXPONENT_BIAS_32 = 127
+    EXPONENT_BIAS_8 = (1 << (exponent_bits - 1)) - 1
+    SHIFT_MANTISSA_32_TO_8 = 23 - mantissa_bits
+    
+    # Pack the 32-bit float into 4 bytes and convert to integer for manipulation
+    packed_float = struct.pack('>f', float32)
+    int_bits = struct.unpack('>I', packed_float)[0]
+    
+    # Extract sign, exponent, and mantissa from the 32-bit float
+    sign = (int_bits & SIGN_MASK) >> 31
+    exponent_32 = (int_bits >> 23) & 0xFF
+    mantissa_32 = int_bits & 0x007FFFFF
+    
+    # Adjust the exponent from 32-bit float bias to custom float bias
+    if exponent_32 == 0:  # Zero or subnormal
+        exponent_8 = 0
+        mantissa_8 = 0
+    else:
+        exponent_8 = max(0, min((1 << exponent_bits) - 1, exponent_32 - EXPONENT_BIAS_32 + EXPONENT_BIAS_8))
+    
+    # Convert and round the 32-bit mantissa to custom-bit mantissa
+    mantissa_8 = (mantissa_32 >> SHIFT_MANTISSA_32_TO_8) & ((1 << mantissa_bits) - 1)
+    
+    # Combine sign, exponent, and mantissa into the custom float
+    custom_float = (sign << (exponent_bits + mantissa_bits)) | (exponent_8 << mantissa_bits) | mantissa_8
+    
+    # Return the hexadecimal representation as a string with the 0x prefix
+    return f'0x{custom_float:02x}'
+
+def apply_to_tensor(input_tensor, exponent_bits, mantissa_bits):
+    flat_tensor = input_tensor.flatten()
+    converted = [float32_to_custom_fp8(val.item(), exponent_bits, mantissa_bits) for val in flat_tensor]
+    converted_numpy = np.array(converted).reshape(input_tensor.shape)
+    return converted_numpy
 
 
 def emit_license():
@@ -31,7 +96,7 @@ def emit_license():
 # Enum value can be a string or an integer, this function uniformizes the result to integers only
 def _integer_precision_t(prec):
     if isinstance(prec, str):
-        return {'FP64': 8, 'FP32': 4, 'FP16': 2, 'FP8': 1}[prec]
+        return {'FP64': 8, 'FP32': 4, 'FP16': 2, 'FP8': 1, 'FP8ALT': 1}[prec]
     else:
         return prec
 
@@ -47,7 +112,7 @@ def torch_type_from_precision_t(prec):
         8: torch.float64,
         4: torch.float32,
         2: torch.float16,
-        1: None
+        1: torch.float8_e4m3fn
     }
     return ctype_to_torch_type_map[_integer_precision_t(prec)]
 
@@ -130,20 +195,10 @@ def format_scalar_definition(dtype, uid, scalar):
 def format_array_initializer(dtype, array):
     s = '{\n'
     # Flatten array
-    if dtype == '__fp8':
-        array = zip(flatten(array['sign']),
-                    flatten(array['exponent']),
-                    flatten(array['mantissa']))
-    else:
-        array = flatten(array)
+    array = flatten(array)
     # Format array elements
     for el in array:
-        if dtype == '__fp8':
-            sign, exp, mant = el
-            el = sign * 2**7 + exp * 2**2 + mant
-            el_str = f'0x{el:02x}'
-        else:
-            el_str = f'{el}'
+        el_str = f'{el}'
         s += f'\t{el_str},\n'
     s += '}'
     return s
